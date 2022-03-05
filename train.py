@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn import init
 import numpy as np
 import pandas as pd
@@ -13,6 +14,8 @@ from sklearn.model_selection import KFold
 from models.CNN_RNN import Classifier_Net
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc, confusion_matrix
 from models.Small_TCN import Small_TCN
+from sklearn.preprocessing import OneHotEncoder
+
 
 # hyper parameters
 GPU_NUM = 0
@@ -96,6 +99,26 @@ def cal_results(Label_all, predict_y_all):
     matrix = confusion_matrix(Label_all, predict_y_all)
 
     return results, matrix
+
+
+def cal_roc_auc(Label_all, predict_roc):
+
+    label_one_hot = OneHotEncoder().fit_transform(Label_all.reshape(-1, 1)).toarray()
+    auc_score = []
+    for i in range(predict_roc.shape[1]):
+        fpr, tpr, th = roc_curve(label_one_hot[:, i], predict_roc[:, i])
+        auc_score.append(auc(fpr, tpr))
+        plt.subplot(3, 3, i + 1)
+        plt.plot(fpr, tpr, linewidth=2, label="ROC")
+        plt.xlabel("false presitive rate")
+        plt.ylabel("true presitive rate")
+        plt.ylim(0, 1)
+        plt.xlim(0, 1)
+        plt.legend(loc=4)
+    plt.show()
+
+    return auc_score
+
 
 def train_net_classifier(save_path, MAX_ACC):
     # ==read data==
@@ -215,6 +238,7 @@ def train_net_classifier(save_path, MAX_ACC):
 
             acc = 0.0  # accumulate accurate number / epoch
             predict_y_all = []
+            predict_roc = None
             # y_scores = []
             Label_all = []
 
@@ -224,12 +248,14 @@ def train_net_classifier(save_path, MAX_ACC):
                     outputs = CNet(val_data.to(device=device))  # eval models only have last output layer
                     # loss = loss_function(outputs, test_labels)
                     # predict_y = torch.max(outputs.cpu(), dim=1)[1]
+                    predict = F.softmax(outputs, dim=1).cpu()
                     predict_y = torch.max(outputs.cpu(), 1)[1].data.numpy() #
                     # val_C_label = val_labels[:, (tree_deep * dim):]  # .contiguous()
                     # val_C_label = val_C_label.squeeze().long()
                     acc += sum(1 for a, b in zip(predict_y, val_labels.to(device=device)) if a == b) #.to(device=device)
                     # acc += sum(predict_y == val_labels.cuda(GPU_NUM))
 
+                    predict_roc = np.concatenate((predict_roc, predict), axis=0) if predict_roc is not None else predict
                     predict_y_all = np.concatenate((predict_y_all, predict_y), axis=0)
 
                     Label_all = np.concatenate((Label_all, val_labels.cpu().data.numpy()), axis=0)#.to(device=device)
@@ -237,8 +263,9 @@ def train_net_classifier(save_path, MAX_ACC):
                 val_accurate = acc / test_num
 
                 results, matrix = cal_results(Label_all, predict_y_all)
+                auc_score = cal_roc_auc(Label_all, predict_roc)
 
-                print(val_accurate, results, '\n', matrix)
+                print(val_accurate, results, '\n', matrix, auc_score)
 
                 if val_accurate > MAX_ACC:
                     MAX_ACC = val_accurate
